@@ -1,0 +1,5 @@
+a0332645b171420096c99018ac9e00dc262a3f400fa2094ffbbb4b660fd73c35  flink-connector-base-1.20.1.jar
+0deab094f7f54df9e8cb7c77c15b4392e1f9923f98f8972b4346f6ff384bf5e6  flink-connector-kafka-3.4.0-1.20.jar
+48f38dede69bf2ed3709e270afb6b72fac869651fc258997727dba350333ac64  kafka-clients-3.4.0.jar
+864ec20256cc81cfbf0ec01bd9b9dc794107fdd17ae69e17660134648c41e939  flink-sql-connector-mysql-cdc-3.6.0-1.20.jar
+e3d7f91d1f56def7c5d42bd00ed6184e9362f460a2616c4d7a5e1d9ae6dc7e72  flink-sql-connector-postgres-cdc-3.6.0-1.20.jar

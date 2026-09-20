@@ -1,0 +1,7 @@
+# gov_metrics 指标 ETL（ADR-A6）：每小时 :25，与备份错峰
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=""
+25 * * * * root /usr/bin/python3 /data/ai-governance/scripts/gov_metrics_etl.py >> /data/backup/log/gov_metrics_etl.log 2>&1
+# S4-2：OM 元数据 → 向量库（rag.doc）定期刷新；滞后于 ETL(:25) 以免抢 IO
+40 * * * * root docker exec ai-governance-poc-governance-agent-1 python /app/rag.py --ingest >> /data/backup/log/rag_ingest.log 2>&1

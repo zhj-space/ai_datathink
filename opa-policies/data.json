@@ -1,0 +1,27 @@
+{
+  "governance": {
+    "config": {
+      "pii_tags": [
+        "PII.Sensitive",
+        "PII.NonSensitive",
+        "PersonalData.SpecialCategory"
+      ],
+      "high_risk_operations": [
+        "export",
+        "download",
+        "bulk_read"
+      ],
+      "bulk_row_threshold": 10000,
+      "off_hours_utc": {
+        "start": 22,
+        "end": 6
+      },
+      "alert_channels": {
+        "high": "governance.alerts#p1",
+        "medium": "governance.alerts#p2",
+        "low": "audit_log_only"
+      },
+      "note": "POC 期口径：只做事后审计 + 主动告警，不做事前拦截（设计方案场景 E / ADR-A3）。阈值与标签清单属待人工审核项。"
+    }
+  }
+}

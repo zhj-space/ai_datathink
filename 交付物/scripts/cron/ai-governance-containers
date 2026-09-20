@@ -1,0 +1,5 @@
+# 通用容器运行面采集（cgroup v2；cAdvisor 在本环境拿不到逐容器指标）→ node_exporter textfile 收集器
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=""
+* * * * * root /data/ai-governance/scripts/container_probe.sh >> /data/backup/log/container_probe.log 2>&1

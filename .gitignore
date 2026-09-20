@@ -1,0 +1,26 @@
+# 构建产物 / 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 编辑器与系统垃圾
+.DS_Store
+Thumbs.db
+*~
+*.swp
+.idea/
+.vscode/
+
+# 临时与备份（改动前快照由服务器 /data/backup/config/ 保存，不入库）
+*.bak-*
+*.orig
+*.rej
+*.tmp
+
+# 绝不入库：真实凭证（口令/密钥一律只放服务器 /data/ai-governance/.env）
+.env
+.env.*
+*.pem
+id_rsa*
+id_ed25519*
+server-info.local.md

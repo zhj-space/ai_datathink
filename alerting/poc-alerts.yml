@@ -1,0 +1,481 @@
+# Prometheus 告警规则（POC 单机版）
+#
+# 依据：
+#   * S1-7：SLO 阈值 CPU < 80%、内存 < 85%（2026-09-18 补齐规则载体——此前 `rule_files` 为空，规则从未被加载）
+#   * S3-4 判据②：复制槽水位 → 最高优先级告警，阈值 = 兜底值 × 70%
+#   * S3-6：作业状态 / Checkpoint 成功率告警（待作业上线后追加，届时按 ADR-A2 第 3 件补）
+#
+# 纪律：
+#   * 阈值不臆造：水位阈值取自 SQL 计算的 retained_pct_of_budget（分母是源库实际兜底值），本文件**不含任何硬编码兜底数值**；
+#   * "兜底未配置"必须单独告警（PgReplicationSlotNoSafetyCap），否则水位规则在兜底为 -1 时永远不会触发；
+#   * 通知通道（Alertmanager receiver）待 IM/Webhook 地址确认后接入（S3-6）；当前 Alertmanager 仅 default 接收器。
+
+groups:
+  - name: poc-slo
+    rules:
+      - alert: HostCpuUsageHigh
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          source: s1-7-slo
+        annotations:
+          summary: "宿主机 CPU 使用率 > 80%（持续 10m）"
+          description: "S1-7 约定的 SLO 阈值：CPU < 80%。当前 {{ $value | printf \"%.1f\" }}%。"
+
+      - alert: HostMemoryUsageHigh
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          source: s1-7-slo
+        annotations:
+          summary: "宿主机内存使用率 > 85%（持续 10m）"
+          description: "S1-7 约定的 SLO 阈值：内存 < 85%。当前 {{ $value | printf \"%.1f\" }}%。单机无冗余，需人工介入。"
+
+      - alert: HostFilesystemUsageHigh
+        expr: |
+          (1 - node_filesystem_avail_bytes{mountpoint=~"/|/data"}
+              / node_filesystem_size_bytes{mountpoint=~"/|/data"}) * 100 > 85
+        for: 15m
+        labels:
+          severity: critical
+          source: poc-disk-guard
+        annotations:
+          summary: "文件系统使用率 > 85%（{{ $labels.mountpoint }}）"
+          description: "POC 为 100G 单盘（0.3 降级声明），磁盘打满会同时打穿 PG/OpenSearch/Kafka。当前 {{ $value | printf \"%.1f\" }}%。"
+
+      # 绝对余量护栏（2026-09-18 新增）：**本环境无独立数据盘**，85% 相对阈值来得太晚；
+      # 20 GiB 是 POC 运维经验阈值（**工程经验估算，非源文档口径**），命中即意味着"该考虑加盘"。
+      # ⚠ 只盯 `/` 与 `/data`：不加 mountpoint 过滤会**误报 `/boot/efi`（约 200MB 的 ESP 分区）**——本轮实测踩到过一次。
+      - alert: HostDiskHeadroomLow
+        expr: node_filesystem_avail_bytes{mountpoint=~"/|/data"} < 20 * 1024 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: critical
+          source: poc-disk-guard
+        annotations:
+          summary: "可用空间不足 20 GiB（{{ $labels.mountpoint }}，当前 {{ $value | humanize1024 }}B）"
+          description: "命中加盘触发条件。先做无损回收（镜像/构建缓存/保留期/日志），仍不足则加挂数据盘并迁 /data（步骤见《…S3前置部署记录.md》磁盘章节）。磁盘打满会同时打穿 PG / OpenSearch / Kafka。"
+
+  - name: postgres-replication-slot
+    rules:
+      # ★ S3-4 判据②：兜底未配置（fail-visible）
+      # 范围收窄：**仅在"确实存在复制槽"时报**——没有槽的实例（例如平台自身的 PG）不会被这条规则刷屏，
+      # 从而避免把真正的源库告警淹没在噪声里。判据：无兜底 + 有槽 = 风险成立。
+      - alert: PgReplicationSlotNoSafetyCap
+        expr: |
+          (pg_settings_max_slot_wal_keep_size_bytes < 0)
+            and on (instance, job)
+          (count by (instance, job) (pg_replication_slot_reserved) >= 1)
+        for: 10m
+        labels:
+          severity: critical
+          source: s3-4-slot-guard
+        annotations:
+          summary: "PG 源库未设置 max_slot_wal_keep_size（无兜底上限）"
+          description: "兜底未配置时：① 停机期间 slot 会无限保留 WAL，可能撑爆源库磁盘；② 水位规则失去分母，永远不会告警。请 DBA 按《…S3-1门禁④材料包.md》§5.3 落值。"
+
+      # ★ S3-4 判据②：水位超兜底值 70%（阈值由 SQL 计算，无硬编码）
+      - alert: PgReplicationSlotWatermarkHigh
+        expr: pg_replication_slot_retained_pct_of_budget > 70
+        for: 5m
+        labels:
+          severity: critical
+          source: s3-4-slot-guard
+        annotations:
+          summary: "复制槽 {{ $labels.slot_name }} 水位已达兜底值的 {{ $value }}%（> 70%）"
+          description: "按 ADR-A2 第 2 件第②道防线，须最高优先级处置：检查 CDC 作业是否停机/背压，必要时先恢复作业，或按「作业下线 checklist」处置该 slot。"
+
+      - alert: PgReplicationSlotInactiveHoldingWal
+        expr: pg_replication_slot_active == 0 and pg_replication_slot_retained_bytes > 0
+        for: 15m
+        labels:
+          severity: warning
+          source: s3-4-slot-guard
+        annotations:
+          summary: "复制槽 {{ $labels.slot_name }} 无消费者但仍在持有 WAL"
+          description: "active=0 且持有 WAL 是「作业已停但 slot 未删」的典型特征；按 checklist 确认后处置，不得随手删除。"
+
+      - alert: PgReplicationSlotInvalidated
+        expr: pg_replication_slot_invalidated > 0
+        for: 1m
+        labels:
+          severity: critical
+          source: s3-4-slot-guard
+        annotations:
+          summary: "复制槽 {{ $labels.slot_name }} 已失效（wal_status=lost）"
+          description: "槽已丢失所需 WAL ⇒ 续接窗口用尽，须触发 ADR-A2 第 4 件「重快照预案」评估，并与 DBA 确认处置。"
+
+      - alert: PgReplicationSlotBeyondCap
+        expr: pg_replication_slot_beyond_cap > 0
+        for: 1m
+        labels:
+          severity: critical
+          source: s3-4-slot-guard
+        annotations:
+          summary: "复制槽 {{ $labels.slot_name }} 已超出兜底值（wal_status=extended）"
+          description: "WAL 保留量已超过 max_slot_wal_keep_size 但尚未丢失；继续增长即会失效。须立即人工介入（这是磁盘被撑爆前最后一道可观测信号）。"
+
+  - name: kafka-lag
+    rules:
+      # 设计方案 4.5：**Kafka 消费滞后 | lag 持续增长 5 分钟以上告警**
+      - alert: KafkaConsumerLagGrowing
+        expr: (kafka_consumergroup_lag > 0) and (deriv(kafka_consumergroup_lag[10m]) > 0)
+        for: 5m
+        labels:
+          severity: warning
+          source: s3-kafka-lag
+        annotations:
+          summary: "消费组 {{ $labels.consumergroup }} 在 {{ $labels.topic }} 上的 lag 持续增长（>5m）"
+          description: "口径来自设计方案 4.5（lag 持续增长 5 分钟以上告警）。当前 lag={{ $value }}。先查 Governance Agent / Flink 消费者是否停滞，再查 broker 侧是否背压。"
+
+      - alert: KafkaBrokerDown
+        expr: kafka_brokers < 1
+        for: 2m
+        labels:
+          severity: critical
+          source: s3-kafka-lag
+        annotations:
+          summary: "Kafka 可用 broker 数为 {{ $value }}（应为 1，单节点形态）"
+          description: "单节点形态无冗余：broker 不可用即实时链路中断（`governance.alerts` 停发、日志事件不可重放）。须人工介入，不得自动降级。"
+
+      - alert: KafkaExporterScrapeFailed
+        expr: up{job="kafka"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          source: s3-kafka-lag
+        annotations:
+          summary: "kafka_exporter 抓取失败（job=kafka）"
+          description: "lag 告警依赖该 exporter；抓取失败意味着**消费滞后不可观测**（不是没有滞后）。先查 exporter 服务与 9094 回环监听。"
+
+  # ===== Flink 作业 / Checkpoint（2026-09-19 新增；S3-6 把"作业状态 / Checkpoint 成功率"列为**最高优先级告警**）=====
+  # 数据来源：Flink 官方 Prometheus reporter（`metrics.reporter.prom.*`，端口 9249），Prometheus 以 job="flink" 抓取。
+  # ⚠️ 接源前没有作业，故除"抓取失败"外的规则都只在**确有作业/确有登记**时才可能命中，避免长期误报。
+  - name: flink-jobs
+    rules:
+      - alert: FlinkMetricsScrapeFailed
+        expr: up{job="flink"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          source: s3-3-flink
+        annotations:
+          summary: "Flink 指标抓取失败（job=flink，target={{ $labels.instance }}）"
+          description: "作业状态与 Checkpoint 告警**依赖该抓取**；失败即「作业健康不可观测」。先查 JM/TM 的 9249 监听与容器网络（backend-net）。"
+
+      - alert: FlinkRegisteredJobNotRunning
+        expr: |
+          ai_governance_lineage_registered_jobs > 0
+            and on() (flink_jobmanager_numRunningJobs < 1)
+        for: 10m
+        labels:
+          severity: critical
+          source: s3-3-flink
+        annotations:
+          summary: "已登记作业但 Flink 上没有 RUNNING 作业"
+          description: "登记目录 `/data/ai-governance/jobs/*.sql` 有作业（{{ $value }}），但 `numRunningJobs < 1` ⇒ **作业掉了或没起来**。查 JM REST `/jobs/overview`（按 state=RUNNING 过滤，勿用 jobs[0]）与 TM 日志。"
+
+      - alert: FlinkJobRestarted
+        expr: increase(flink_jobmanager_job_numberOfRestarts[30m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          source: s3-3-flink
+        annotations:
+          summary: "Flink 作业发生重启（{{ $labels.job_name }}）"
+          description: "30 分钟内作业重启次数增加 ⇒ 可能反复失败。查 Checkpoint 失败原因与 TM/下游连接。"
+
+      - alert: FlinkCheckpointFailed
+        expr: increase(flink_jobmanager_job_numberOfFailedCheckpoints[30m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          source: s3-3-flink
+        annotations:
+          summary: "Flink Checkpoint 失败（{{ $labels.job_name }}）"
+          description: "Checkpoint 是 ADR-A2 第 3 件（作业自动拉起）与位点续接的前提；**持续失败等于恢复能力失效**。查 state.checkpoints.dir 可写性、TM 磁盘与背压。"
+
+      - alert: FlinkCheckpointStalled
+        expr: |
+          flink_jobmanager_job_uptime > 900
+            and flink_jobmanager_job_totalNumberOfCheckpoints > 0
+            and increase(flink_jobmanager_job_numberOfCompletedCheckpoints[10m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+          source: s3-3-flink
+        annotations:
+          summary: "Flink Checkpoint 停摆（{{ $labels.job_name }}）"
+          description: "作业已运行 >15 分钟且**配了 Checkpoint**，但 10 分钟内**无一完成** ⇒ 停摆。查背压、Checkpoint 超时与存储目录。"
+
+  # 作业新鲜度（2026-09-18 新增；数据来自 node_exporter textfile 收集器，见 scripts/job_freshness.sh）
+  # 口径：小时级作业 → 1.5×周期（5400s）；日级作业 → 30h；采集器自身 → 3×周期（900s）
+  - name: job-freshness
+    rules:
+      - alert: PgBackupStale
+        expr: time() - ai_governance_job_last_success_timestamp_seconds{task="backup_pg"} > 5400
+        for: 10m
+        labels:
+          severity: critical
+          source: s1-8-backup
+        annotations:
+          summary: "PG 逻辑备份超过 1.5 小时未见成功"
+          description: "备份作业每小时 :05 执行；**RPO ≤1h 的承诺依赖它**。当前最近成功为 {{ $value | humanizeDuration }} 前。排查：cron 是否执行、脚本退出码、磁盘空间（见 /data/backup/log/cron.log）。"
+
+      - alert: OpenSearchBackupStale
+        expr: time() - ai_governance_job_last_success_timestamp_seconds{task="backup_opensearch"} > 5400
+        for: 10m
+        labels:
+          severity: critical
+          source: s1-8-backup
+        annotations:
+          summary: "OpenSearch 快照超过 1.5 小时未见成功"
+          description: "快照作业每小时 :15 执行。当前最近成功为 {{ $value | humanizeDuration }} 前。"
+
+      - alert: ConfigBackupStale
+        expr: time() - ai_governance_job_last_success_timestamp_seconds{task="backup_config"} > 108000
+        for: 15m
+        labels:
+          severity: warning
+          source: s1-8-backup
+        annotations:
+          summary: "配置出机（.env/compose/config）超过 30 小时未见成功"
+          description: "配置备份每日 02:55 执行。**FERNET_KEY 等密钥只在 .env 里，配置备份失效等于恢复时会丢失密钥**（见 S1-8 §2.4）。当前最近成功为 {{ $value | humanizeDuration }} 前。"
+
+      - alert: MetricsEtlStale
+        expr: time() - ai_governance_job_last_success_timestamp_seconds{task="etl_gov_metrics"} > 5400
+        for: 10m
+        labels:
+          severity: warning
+          source: s2-5-etl
+        annotations:
+          summary: "gov_metrics ETL 超过 1.5 小时未见成功"
+          description: "ETL 每小时 :25 执行（ADR-A6 指标层）。看板会因此变旧；查 /data/backup/log/gov_metrics_etl.log 与 gov_metrics.etl_run 的 error 列。"
+
+      - alert: RagIngestStale
+        expr: time() - ai_governance_job_last_success_timestamp_seconds{task="etl_rag"} > 5400
+        for: 10m
+        labels:
+          severity: warning
+          source: s4-2-rag
+        annotations:
+          summary: "RAG 向量库刷新超过 1.5 小时未见成功"
+          description: "向量刷新每小时 :40 执行。失效则问答会基于过期元数据（最长滞后已承诺 1h）。查 /data/backup/log/rag_ingest.log。"
+
+      - alert: OffsiteBackupStale
+        expr: |
+          ai_governance_job_configured{task="backup_offsite"} == 1
+            and on() (time() - ai_governance_job_last_success_timestamp_seconds{task="backup_offsite"} > 108000)
+        for: 15m
+        labels:
+          severity: critical
+          source: s1-8-backup
+        annotations:
+          summary: "每日出机（异地）超过 30 小时未见成功"
+          description: "出机介质已配置但连续 >30h 未成功 ⇒ **备份仍在同一故障域**（门禁② 的实质条件之一）。"
+
+      # D1 血缘对账（2026-09-19 新增）：对账任务的价值就是"发现漂移"，它自己静默失败等于没做
+      - alert: LineageReconcileStale
+        expr: time() - ai_governance_job_last_success_timestamp_seconds{task="lineage_reconcile"} > 108000
+        for: 15m
+        labels:
+          severity: warning
+          source: s3-5-lineage
+        annotations:
+          summary: "血缘对账任务超过 30 小时未见成功"
+          description: "对账每日执行（cron）。它停摆时**OM 侧血缘与 GA 期望集的漂移将不可发现**（例：实体被删导致边消失，而 GA 状态仍为 applied）。查 /data/backup/log/lineage_reconcile.log 与 GA `POST /api/v1/lineage/reconcile`。"
+
+      - alert: JobFreshnessCollectorStale
+        expr: time() - ai_governance_job_freshness_collector_last_run_timestamp_seconds > 900
+        for: 10m
+        labels:
+          severity: warning
+          source: s1-8-backup
+        annotations:
+          summary: "作业新鲜度采集器超过 15 分钟未运行"
+          description: "采集器每 5 分钟运行（cron）。它停摆时**所有新鲜度告警都会失真**（既不触发也无数据）。查 job_freshness.sh 与 /var/lib/node_exporter/textfile/。"
+
+      - alert: JobFreshnessMetricsMissing
+        expr: absent(ai_governance_job_last_success_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: warning
+          source: s1-8-backup
+        annotations:
+          summary: "作业新鲜度指标整体缺失"
+          description: "textfile 采集未产生任何指标 ⇒ 备份/ETL 的静默失败将**不可观测**。检查 node_exporter 的 --collector.textfile.directory 与 /var/lib/node_exporter/textfile/ai_governance_jobs.prom。"
+
+      # 防"标签写错导致规则永远匹配不到"这类静默失效（2026-09-18 实测踩到：`job` 标签与 Prometheus 冲突被改名）
+      - alert: JobFreshnessSeriesIncomplete
+        expr: count(ai_governance_job_last_success_timestamp_seconds) < 6
+        for: 15m
+        labels:
+          severity: warning
+          source: s1-8-backup
+        annotations:
+          summary: "作业新鲜度指标数量不足（当前 {{ $value }} 条，预期 ≥6）"
+          description: "预期 6 个作业（backup_pg / backup_opensearch / backup_config / etl_gov_metrics / etl_rag / lineage_reconcile；出机已配置时另有 backup_offsite）。数量不足说明**采集或标签有问题，相关陈旧告警会静默失效**。"
+
+  # ===== Ollama 运行面（2026-09-19 新增）=====
+  # 依据：S4-1 纪律「并发限流，**不得拖慢实时告警链路**」；但 Ollama 0.34.2 **无 Prometheus 端点**
+  #      （实测 `GET /metrics` = 404、Prometheus 侧 ollama 抓取目标 = 0）⇒ 运行面此前**完全不可观测**。
+  # 数据来源：`scripts/ollama_probe.sh` → node_exporter **textfile** 收集器（独立文件 `ai_governance_ollama_runtime.prom`）。
+  #      **不用 cAdvisor**：本环境 cAdvisor 拿不到逐容器指标（Docker 29.8.1 用 containerd 镜像存储，
+  #      layerdb/mount-id 不存在 ⇒ cAdvisor v0.45.0 建不出容器对象，只导出根 cgroup；2026-09-19 实测）。
+  # 阈值口径：CPU 80% / 内存 85% **沿用 S1-7 的 SLO 阈值**，分母取**容器自身的 cgroup 限额**（非宿主），故不新增臆造数值。
+  - name: ollama-runtime
+    rules:
+      - alert: OllamaApiDown
+        expr: ai_governance_ollama_up == 0
+        for: 5m
+        labels:
+          severity: critical
+          source: s4-1-ollama
+        annotations:
+          summary: "Ollama API 不可达（GET /api/ps 失败）"
+          description: "场景 D 问答与 RAG 向量化（嵌入）都依赖 Ollama。先查容器状态与回环 11434（`docker ps` / `curl 127.0.0.1:11434/api/version`），再看是否被 OOM kill（见 OllamaContainerOomKilled）。"
+
+      - alert: OllamaContainerCpuSaturated
+        expr: |
+          rate(ai_governance_container_cpu_usage_seconds_total{container="ollama"}[10m])
+            / ai_governance_container_cpu_limit_cores{container="ollama"} > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          source: s4-1-ollama
+        annotations:
+          summary: "Ollama 容器 CPU 持续 > 80% 自身限额（10m）"
+          description: "S4-1 纪律要求 Ollama 不得拖慢实时告警链路，故与 S1-7 的 CPU<80% 同口径、分母取容器限额（compose 8 vCPU）。当前 {{ $value | printf \"%.3f\" }} × 限额。检查是否有并发推理或长时间未卸载的模型。"
+
+      - alert: OllamaContainerMemoryHigh
+        expr: |
+          (ai_governance_container_memory_current_bytes{container="ollama"}
+             / ai_governance_container_memory_max_bytes{container="ollama"} > 0.85)
+            and on (container) (ai_governance_container_memory_max_bytes{container="ollama"} > 0)
+        for: 10m
+        labels:
+          severity: warning
+          source: s4-1-ollama
+        annotations:
+          summary: "Ollama 容器内存占用 > 85% 自身限额（10m）"
+          description: "与 S1-7 的内存<85% 同口径，分母取容器 cgroup 限额（compose 16G）。`memory.current` **含页缓存**（模型权重经 mmap 计入），持续贴近上限会被 cgroup OOM kill ⇒ 用 OllamaContainerOomKilled 兜底。当前 {{ $value | printf \"%.3f\" }} × 限额。"
+
+      - alert: OllamaContainerOomKilled
+        expr: increase(ai_governance_container_oom_kill_total{container="ollama"}[30m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          source: s4-1-ollama
+        annotations:
+          summary: "Ollama 容器被 cgroup OOM kill（30m 内 {{ $value }} 次）"
+          description: "内存上限（compose 16G）被击穿 ⇒ 推理进程被杀、场景 D 与 RAG 中断。按 S4-1 §4「档位选择」评估：换更小/量化模型，或按门禁原文触发 GPU 评估；**不得由 Agent 自行改限额或换模型**。"
+
+      - alert: OllamaModelNotUnloading
+        expr: max(ai_governance_ollama_model_expires_in_seconds) > 3600
+        for: 15m
+        labels:
+          severity: warning
+          source: s4-1-ollama
+        annotations:
+          summary: "Ollama 模型卸载期限 > 1h（疑似被客户端 keep_alive 钉住）"
+          description: "容器配 `OLLAMA_KEEP_ALIVE=10m`，空闲时 `/api/ps` 的 `expires_at` 应在 600s 内。>1h 说明有调用方在请求里传了更大的 `keep_alive`（或 -1=常驻）⇒ 模型长期占内存/CPU，违背 S4-1「不得拖慢实时告警链路」。查 RAG/门户的调用参数。"
+
+      - alert: OllamaProbeStale
+        expr: time() - ai_governance_ollama_probe_last_run_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          source: s4-1-ollama
+        annotations:
+          summary: "Ollama 运行面采集器超过 5 分钟未运行"
+          description: "采集器每分钟运行（cron）。它停摆时**Ollama 运行面不可观测**（上一条告警也不会触发）。查 `/data/ai-governance/scripts/ollama_probe.sh`、cron 与 /var/lib/node_exporter/textfile/。当前滞后 {{ $value | humanizeDuration }}。"
+
+      - alert: OllamaRuntimeMetricsMissing
+        expr: absent(ai_governance_ollama_probe_last_run_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: warning
+          source: s4-1-ollama
+        annotations:
+          summary: "Ollama 运行面指标整体缺失"
+          description: "textfile 采集未产生任何指标 ⇒ Ollama 的运行面告警**全部静默失效**。检查 node_exporter 的 `--collector.textfile.directory` 与 `ai_governance_ollama_runtime.prom` 是否存在/合法（任一非法行会被整文件拒收）。"
+
+  # ===== 通用容器运行面（2026-09-19 新增）=====
+  # 背景：**cAdvisor 在本环境拿不到逐容器指标**（Docker 29.8.1 = containerd 镜像存储，layerdb 的 mount-id 不存在，
+  #      现役 cAdvisor v0.45.0 只导出根 cgroup）；升级又缺可用镜像源（DaoCloud 拦截非白名单仓库、gcr/quay 不可达、
+  #      可用镜像站上 cadvisor 最高仅 v0.45.0）⇒ 容器级可视性改由 `scripts/container_probe.sh` **自采**（cgroup v2）。
+  # 数据来源：`container_probe.sh` → 独立 textfile 文件 `ai_governance_containers.prom`（cron 每分钟）。
+  # 标签：`container`（compose 服务名，无则容器名）+ `name`（容器名）；阈值沿用 S1-7 的 80%/85% 口径，分母为容器 cgroup 限额。
+  - name: container-runtime
+    rules:
+      - alert: ContainerMetricsMissing
+        expr: absent(ai_governance_container_probe_last_run_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: warning
+          source: s1-7-containers
+        annotations:
+          summary: "容器运行面指标整体缺失"
+          description: "自采未产生任何指标 ⇒ 全部容器级告警**静默失效**（含 OOM）。检查 node_exporter 的 `--collector.textfile.directory` 与 `/var/lib/node_exporter/textfile/ai_governance_containers.prom` 是否存在且每行合法。"
+
+      - alert: ContainerProbeStale
+        expr: time() - ai_governance_container_probe_last_run_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          source: s1-7-containers
+        annotations:
+          summary: "容器运行面采集器超过 5 分钟未运行"
+          description: "采集器每分钟运行（cron `/etc/cron.d/ai-governance-containers`）。它停摆时容器级 CPU/内存/OOM **不可观测**。查 `scripts/container_probe.sh` 与 cron 日志。当前滞后 {{ $value | humanizeDuration }}。"
+
+      - alert: ContainerSeriesIncomplete
+        expr: count(ai_governance_container_memory_current_bytes) < ai_governance_container_probe_containers
+        for: 15m
+        labels:
+          severity: warning
+          source: s1-7-containers
+        annotations:
+          summary: "容器指标数量不足（{{ $value }}，采集器声明的容器数更多）"
+          description: "采集器按 `docker ps` 清点容器数，但内存序列更少 ⇒ **有容器没采到**（容器刚启动、cgroup 不可读等）。这正是 cAdvisor 那类「看起来在跑、其实没数据」的静默失效，故单独护栏。"
+
+      - alert: ContainerOomKilled
+        # ⚠️ 为什么不用 `increase(...[30m]) > 0`：**2026-09-19 实测踩到**——容器若在**首次采集之前**就发生 OOM，
+        # 序列第一次出现时值已是 1、之后不再变化 ⇒ `increase()` 恒为 0 ⇒ **规则永远不触发**（真实用例：64MB 上限的容器
+        # 启动 12s 内被子进程撑爆，cgroup oom_kill=1，但 increase 窗口内无增量）。故改用**累计计数**判据：
+        # 计数随容器重启清零（cgroup 重建），因此"报出来 = 本实例确实发生过 OOM"，语义确定、可自愈。
+        expr: ai_governance_container_oom_kill_total > 0
+        for: 5m
+        labels:
+          severity: critical
+          source: s1-7-containers
+        annotations:
+          summary: "容器 {{ $labels.name }} 发生过 cgroup OOM kill（本实例累计 {{ $value }} 次）"
+          description: "该容器内存上限（compose `deploy.resources.limits.memory`）被击穿 ⇒ 进程被杀、功能中断。**计数为累计值，容器重启后清零**；持续增长说明上限不足或负载异常。先看 `memory_anon_bytes`（真占用）与 `memory_file_bytes`（可回收页缓存）区分原因，再决定**人工**调限额或降负载（不得由 Agent 自行改限额）。"
+
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          (ai_governance_container_memory_current_bytes
+             / ai_governance_container_memory_max_bytes > 0.85)
+            and on (container, name) (ai_governance_container_memory_max_bytes > 0)
+        for: 15m
+        labels:
+          severity: warning
+          source: s1-7-containers
+        annotations:
+          summary: "容器 {{ $labels.name }} 内存占用 > 85% 自身限额（15m）"
+          description: "与 S1-7 的内存<85% 同口径，分母取**容器 cgroup 限额**。`memory.current` **含可回收页缓存**，故先用 `memory_anon_bytes`/`memory_file_bytes` 判读是不是真涨；持续贴近上限会被 OOM kill（见 ContainerOomKilled）。"
+
+      - alert: ContainerCpuSaturated
+        expr: |
+          (rate(ai_governance_container_cpu_usage_seconds_total[15m])
+             / ai_governance_container_cpu_limit_cores > 0.9)
+            and on (container, name) (ai_governance_container_cpu_limit_cores > 0)
+        for: 30m
+        labels:
+          severity: warning
+          source: s1-7-containers
+        annotations:
+          summary: "容器 {{ $labels.name }} 持续 > 90% CPU 限额（30m）"
+          description: "单机无冗余：某容器长期吃满自身 CPU 限额会拖慢同机其它组件（实时告警链路优先）。先确认是预期批处理（备份/ETL/压测）还是异常自旋；Ollama 另有更严的 80%/10m 规则（`ollama-runtime`）。"

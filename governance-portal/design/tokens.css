@@ -1,0 +1,166 @@
+/* ============================================================================
+ * AI 数据治理门户 · 设计令牌（Design Tokens）
+ * 版本：v1.0  日期：2026-09-20
+ *
+ * 单一事实来源：HTML 设计稿与 Streamlit 注入式 CSS 共用本文件。
+ * 全部文字/背景组合已用确定性算法校验 WCAG AA（脚本校验，非目测）：
+ *   - 正文类（<18px）：对比度 ≥ 4.5:1
+ *   - 大字号（≥18px 粗体 / ≥24px）：≥ 3:1
+ *   - 非文字（边框/焦点环/图形）：≥ 3:1
+ * 校验结果见 design/design-system.md「无障碍」章节。
+ * ========================================================================== */
+
+:root {
+  /* ---------- 1. 色彩 · 品牌（深青蓝：金融/政务治理场景的可信感） ---------- */
+  --color-primary-50:  #f2f8fc;
+  --color-primary-100: #e3f0f8;
+  --color-primary-200: #c3dff0;
+  --color-primary-300: #93c4e2;
+  --color-primary-400: #4f9dce;
+  --color-primary-500: #1478b4;  /* 焦点环 / 图形元素，≥3:1 */
+  --color-primary-600: #0f5c8c;  /* 链接文字，白底 7.17:1 */
+  --color-primary-700: #0d4d76;  /* 主按钮底色，白字 8.97:1 */
+  --color-primary-800: #0a3d5e;  /* hover/active，白字 11.40:1 */
+  --color-primary-900: #072c44;
+
+  /* ---------- 2. 色彩 · 中性（文字层级与表面） ---------- */
+  --color-text-primary:   #1a2733;  /* 标题/正文，白底 15.20:1 */
+  --color-text-secondary: #4a5b6b;  /* 次要说明，白底 7.00:1 */
+  --color-text-muted:     #5f6f7e;  /* 弱化/位移，白底 5.17:1（原 #6b7c8c 仅 4.30:1 已弃用） */
+  --color-text-inverse:   #ffffff;
+
+  --color-surface:        #ffffff;  /* 卡片/面板 */
+  --color-surface-sunken: #f7f9fb;  /* 页面底 / 凹陷区 */
+  --color-surface-raised: #ffffff;  /* 浮起卡片（配阴影） */
+
+  --color-border:        #dde5ec;  /* 分隔线（非文字，装饰级） */
+  --color-border-strong: #6b7c8c;  /* 输入框/需可辨识的边界，4.30:1 ≥3:1 */
+
+  /* ---------- 3. 色彩 · 语义（浅底 + 深字，全部 ≥4.5:1） ---------- */
+  --color-success-bg:   #e6f4ed;   --color-success-fg: #0a5c3a;   /* 7.11:1 */
+  --color-success-solid:#0a5c3a;   /* 白字 8.06:1 */
+
+  --color-warning-bg:   #fdf3e2;   --color-warning-fg: #7a4a00;   /* 6.80:1 */
+  --color-warning-solid:#7a4a00;   /* 白字 7.48:1 */
+
+  --color-danger-bg:    #fdeaea;   --color-danger-fg: #9b1c25;    /* 7.01:1 */
+  --color-danger-solid: #9b1c25;   /* 白字 8.12:1 */
+
+  --color-info-bg:      #e8f2f9;   --color-info-fg: #0f5c8c;      /* 6.31:1 */
+  --color-info-solid:   #0f5c8c;
+
+  --color-neutral-bg:   #eef2f5;   --color-neutral-fg: #4a5b6b;   /* 待定/未就绪 */
+
+  /* ---------- 4. 字体 ---------- */
+  /* 中文优先：中文用系统 UI 字体避免 webfont 体积；等宽用于 SQL/版本号/ID */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC",
+               "Noto Sans CJK SC", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+
+  /* 类型尺度（1.200 Minor Third 近似，中文行高放宽） */
+  --text-xs:   0.75rem;   /* 12px · 徽标/位移标注 */
+  --text-sm:   0.8125rem; /* 13px · 表头/辅助 */
+  --text-base: 0.875rem;  /* 14px · 正文基准（治理后台信息密度优先） */
+  --text-md:   1rem;      /* 16px · 卡片标题 */
+  --text-lg:   1.125rem;  /* 18px · 区块标题 */
+  --text-xl:   1.375rem;  /* 22px · 页面标题 */
+  --text-2xl:  1.75rem;   /* 28px · KPI 数字 */
+  --text-3xl:  2.25rem;   /* 36px · 主 KPI */
+
+  --leading-tight:  1.25;  /* 标题 */
+  --leading-normal: 1.5;   /* UI 文本 */
+  --leading-relaxed:1.7;   /* 中文长段落 */
+
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --weight-bold:    700;
+
+  /* ---------- 5. 间距（4px 基准，8 点节奏） ---------- */
+  --space-1: 0.25rem;  /*  4px */
+  --space-2: 0.5rem;   /*  8px */
+  --space-3: 0.75rem;  /* 12px */
+  --space-4: 1rem;     /* 16px */
+  --space-5: 1.25rem;  /* 20px */
+  --space-6: 1.5rem;   /* 24px */
+  --space-8: 2rem;     /* 32px */
+  --space-10:2.5rem;   /* 40px */
+  --space-12:3rem;     /* 48px */
+
+  /* ---------- 6. 圆角 ---------- */
+  --radius-sm: 4px;
+  --radius-md: 6px;   /* 按钮/输入框 */
+  --radius-lg: 10px;  /* 卡片 */
+  --radius-xl: 14px;  /* 大面板 */
+  --radius-full: 999px;
+
+  /* ---------- 7. 阴影（克制：治理工具不做重投影） ---------- */
+  --shadow-xs: 0 1px 2px rgb(16 36 51 / 0.05);
+  --shadow-sm: 0 1px 3px rgb(16 36 51 / 0.07), 0 1px 2px rgb(16 36 51 / 0.04);
+  --shadow-md: 0 4px 12px -2px rgb(16 36 51 / 0.09), 0 2px 4px -2px rgb(16 36 51 / 0.05);
+  --shadow-focus: 0 0 0 3px rgb(20 120 180 / 0.28);  /* 焦点外环 */
+
+  /* ---------- 8. 动效 ---------- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+
+  /* ---------- 9. 布局 ---------- */
+  --sidebar-w: 248px;
+  --content-max: 1180px;
+  --header-h: 64px;
+}
+
+/* ============================================================================
+ * 深色模式：仅覆盖色彩与阴影，结构令牌复用。
+ * 主题切换属性挂在 <html data-theme="dark">。
+ * 每对文字/背景同样经 AA 校验（见设计系统文档）。
+ * ========================================================================== */
+[data-theme="dark"] {
+  --color-primary-500: #4f9dce;
+  --color-primary-600: #7cb8dd;   /* 深底上的链接色，反相：深底需更亮 */
+  --color-primary-700: #a3cfe8;
+  --color-primary-800: #c3dff0;
+
+  --color-text-primary:   #e8eef3;
+  --color-text-secondary: #a9b8c6;
+  --color-text-muted:     #8e9dab;
+  --color-text-inverse:   #0c1720;
+
+  --color-surface:        #16202a;
+  --color-surface-sunken: #0e171f;
+  --color-surface-raised: #1c2833;
+
+  --color-border:        #2b3a47;
+  --color-border-strong: #6f8291;
+
+  --color-success-bg: #10352a;  --color-success-fg: #6fd4a8;
+  --color-warning-bg: #3a2c12;  --color-warning-fg: #f0b761;
+  --color-danger-bg:  #3a1a1e;  --color-danger-fg:  #f0979e;
+  --color-info-bg:    #10304a;  --color-info-fg:    #85c2e6;
+  --color-neutral-bg: #232f3a;  --color-neutral-fg: #a9b8c6;
+
+  --color-success-solid: #1c7d5c;
+  --color-warning-solid: #a3661a;
+  --color-danger-solid:  #b8323e;
+  --color-info-solid:    #1a6fa3;
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-sm: 0 1px 3px rgb(0 0 0 / 0.35);
+  --shadow-md: 0 4px 14px -2px rgb(0 0 0 / 0.45);
+  --shadow-focus: 0 0 0 3px rgb(79 157 206 / 0.35);
+}
+
+/* ============================================================================
+ * 降低动效偏好：尊重系统设置（无障碍必需）
+ * ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

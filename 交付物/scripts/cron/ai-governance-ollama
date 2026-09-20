@@ -1,0 +1,5 @@
+# Ollama 运行面采集（S4-1 纪律：不得拖慢实时告警链路）→ node_exporter textfile 收集器
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=""
+* * * * * root /data/ai-governance/scripts/ollama_probe.sh >> /data/backup/log/ollama_probe.log 2>&1

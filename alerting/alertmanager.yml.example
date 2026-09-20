@@ -1,0 +1,27 @@
+# Alertmanager 配置模板（S1-7 起用；2026-09-19 加"告警汇入 GA"接收器）
+#
+# 落点：服务器 /data/ai-governance/config/alertmanager/alertmanager.yml（只读挂载进 alertmanager 容器）
+# 纪律：
+#   1) 本文件是**模板**，`<GA_INGEST_TOKEN>` 必须替换为真值后落到服务器；**真值不入 Git**（安全基线①）。
+#      真值来源：/data/ai-governance/.env 的 GA_INGEST_TOKEN（与 GA 容器共用同一值）。
+#   2) 改完必须先 `amtool check-config` 通过，再让 AM 重载（`docker kill --signal=HUP <容器>`；本环境未启用 --web-enable-lifecycle）。
+#   3) 为什么不再留一个空的 default receiver：空 receiver 会让告警**只在 UI 里留存、无人知道**；
+#      现在统一投给 GA 落库（`ga.alert_event`，幂等键 alertmanager:<fingerprint>:<status>）。
+#      **注意**：这是"留痕"，不等于"通知到人"——IM/Webhook 地址到位后再补一个 receiver。
+
+route:
+  receiver: ga-ingest
+  group_by: ["alertname"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: ga-ingest
+    webhook_configs:
+      - url: http://governance-agent:8080/api/v1/alerts/ingest
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: <GA_INGEST_TOKEN>

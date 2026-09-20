@@ -1,0 +1,5 @@
+# D1 血缘：每日 04:10 自动上报 + 对账
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=
+10 4 * * * root /data/ai-governance/scripts/lineage_autoreport.sh >> /data/backup/log/cron.log 2>&1

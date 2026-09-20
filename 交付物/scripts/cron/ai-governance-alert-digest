@@ -1,0 +1,5 @@
+# 告警日报：每日 08:30（IM 未配置前的可见性兜底）
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=
+30 8 * * * root /data/ai-governance/scripts/alert_digest.sh >> /data/backup/log/cron.log 2>&1

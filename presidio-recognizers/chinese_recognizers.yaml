@@ -1,0 +1,96 @@
+# Presidio 识别器注册表配置（POC）
+#
+# 用途：《部署步骤_单机版》S2-5 第 1 件——中国证件自定义识别规则（身份证 / 手机号 / 银行卡）。
+#       实测本版本官方可用识别器类里**没有中国大陆**相关识别器（有印度/意大利/韩国等）。
+# 依据：设计方案 2.1（Presidio｜PII 识别与脱敏｜MIT）、场景 A（离线批量扫描 + 置信度分层）。
+# 部署：只读挂载进 presidio-analyzer 容器，经 RECOGNIZER_REGISTRY_CONF_FILE 指向本文件。
+#
+# 注意（须与下游口径一致）：
+# 1) 本镜像只装 en 的 spaCy 模型，故 supported_language 统一用 en；中文文本请以 language=en 调用。
+#    三个自定义识别器均为**纯正则**（PatternRecognizer），不依赖 NLP 模型；若要以 zh 调用需额外下载中文/多语言模型（待确认）。
+# 2) 银行卡号**未做 Luhn 校验**（YAML 配置无法挂自定义校验函数），基础分较低并依赖上下文词提升；
+#    误报由 S2-5 第 2 件「置信度分层」在下游消解。
+# 3) 身份证正则只做**结构性校验**（地区码 + 出生日期 + 顺序码 + 校验位形态），不验证校验位算法。
+supported_languages:
+  - en
+
+# re.IGNORECASE(2) + re.MULTILINE(8) + re.DOTALL(16) = 26，与 Presidio 默认一致
+global_regex_flags: 26
+
+recognizers:
+  # ---------- 预定义识别器：保留基础 PII 能力 ----------
+  - name: EmailRecognizer
+    type: predefined
+    supported_languages:
+      - en
+
+  - name: IpRecognizer
+    type: predefined
+    supported_languages:
+      - en
+
+  - name: UrlRecognizer
+    type: predefined
+    supported_languages:
+      - en
+
+  # ---------- 中国证件自定义识别器 ----------
+  - name: CnResidentIdRecognizer
+    type: custom
+    supported_language: en
+    supported_entity: CN_RESIDENT_ID
+    patterns:
+      - name: cn_resident_id_18
+        # 18 位：6 位地区码 + 8 位出生日期（19/20 世纪）+ 3 位顺序码 + 1 位校验位（可为 X）
+        regex: '(?<![0-9])[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[0-9Xx](?![0-9])'
+        score: 0.85
+      - name: cn_resident_id_15
+        # 15 位旧号（两位年份、无校验位）
+        regex: '(?<![0-9])[1-9]\d{5}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}(?![0-9])'
+        score: 0.55
+    context:
+      - 身份证
+      - 证件号
+      - 身份
+      - id
+      - identity
+      - resident
+
+  - name: CnMobileRecognizer
+    type: custom
+    supported_language: en
+    supported_entity: CN_MOBILE_PHONE
+    patterns:
+      - name: cn_mobile_with_country_code
+        # +86 / 86 前缀（可带分隔符）
+        regex: '(?<![0-9])(?:\+?86[-\s]?)1[3-9]\d{9}(?![0-9])'
+        score: 0.75
+      - name: cn_mobile_plain
+        # 11 位裸号
+        regex: '(?<![0-9])1[3-9]\d{9}(?![0-9])'
+        score: 0.6
+    context:
+      - 手机
+      - 手机号
+      - 电话
+      - 联系方式
+      - mobile
+      - phone
+
+  - name: CnBankCardRecognizer
+    type: custom
+    supported_language: en
+    supported_entity: CN_BANK_CARD
+    patterns:
+      - name: cn_bank_card_common_prefix
+        # 16~19 位；限定常见号段（62 银联 / 4 开头 Visa / 51~55 MasterCard），以降低与身份证的交叉命中
+        regex: '(?<![0-9])(?:62|4|5[1-5])\d{14,17}(?![0-9])'
+        score: 0.4
+    context:
+      - 银行卡
+      - 卡号
+      - 账号
+      - 银行
+      - bank
+      - card
+      - account

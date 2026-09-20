@@ -1,0 +1,10 @@
+# 备份 / 新鲜度采集 / 水位周报（S1-8 + S4-4）
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=""
+5 * * * * root /data/ai-governance/scripts/backup_pg.sh >> /data/backup/log/cron.log 2>&1
+15 * * * * root /data/ai-governance/scripts/backup_opensearch.sh >> /data/backup/log/cron.log 2>&1
+0 3 * * * root /data/ai-governance/scripts/backup_offsite.sh >> /data/backup/log/cron.log 2>&1
+55 2 * * * root /data/ai-governance/scripts/backup_config.sh >> /data/backup/log/cron.log 2>&1
+*/5 * * * * root /data/ai-governance/scripts/job_freshness.sh >> /data/backup/log/job_freshness.log 2>&1
+0 8 * * 1 root /data/ai-governance/scripts/watermark_report.sh >> /data/backup/log/watermark_report.log 2>&1

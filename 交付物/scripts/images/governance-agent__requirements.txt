@@ -1,0 +1,9 @@
+# 依赖固定版本（AGENTS §7 版本纪律；升级须同步 README 与《…S3-6首版实现记录.md》）
+# 必需：PostgreSQL 驱动（经 PgBouncer 6432）
+psycopg2-binary==2.9.10
+# 可选：Kafka 消费客户端（缺失时服务仍可运行，/ready 会如实报告 kafka=false）
+confluent-kafka==2.8.0
+# S4-2 RAG 链路（按设计引入 LangGraph；版本为 2026-09-18 本环境实装核对值，均为 MIT）
+langgraph==1.2.11
+langchain-core==1.6.3
+langchain-ollama==1.1.0

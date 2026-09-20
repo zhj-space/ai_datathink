@@ -1,0 +1,61 @@
+# postgres_exporter 自定义查询：PostgreSQL 复制槽水位（S3-4 判据②「水位告警」的采集口径）
+#
+# 用法：postgres_exporter --extend.query-path=/etc/pg_exporter_queries.yml
+# 实测记录（2026-09-18，postgres_exporter v0.20.1）：
+#   * `--extend.query-path` **仍可用**，仅打印 DEPRECATED 警告；
+#   * 新版 `--config.file` **不接受 `queries:` 键**（实测报 "field queries not found in type config.Config"），
+#     故本环境沿用旧格式，待官方明确新键名后再迁移。
+#
+# 口径要点（与《…S3-1门禁④材料包.md》§5.3/§5.5 一致）：
+#   * retained_bytes = pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)，**量的是 LSN 距离，不是磁盘占用**（含未写满的当前段）；
+#   * retained_pct_of_budget = 相对**兜底值** max_slot_wal_keep_size 的百分比；兜底未配置（-1）时为 NULL（指标缺值），
+#     因此"没配兜底"必须由**单独一条规则**（NoSafetyCap）暴露，不能指望水位规则兜住；
+#   * 未 reserve 的槽（restart_lsn IS NULL）retained=0 —— 这是**正常的"未持有 WAL"**，靠 reserved 指标区分，避免被误读成"水位为 0 很安全"。
+
+pg_replication_slot:
+  query: |
+    SELECT s.slot_name,
+           coalesce(s.slot_type, '')  AS slot_type,
+           coalesce(s.wal_status, '') AS wal_status,
+           coalesce(s.active::int, 0) AS active,
+           CASE WHEN s.restart_lsn IS NULL THEN 0 ELSE 1 END AS reserved,
+           coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn), 0) AS retained_bytes,
+           CASE WHEN b.max_bytes > 0 AND s.restart_lsn IS NOT NULL
+                THEN round(100.0 * pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn) / b.max_bytes, 2)
+                ELSE NULL END AS retained_pct_of_budget,
+           CASE WHEN coalesce(s.wal_status, '') = 'lost'     THEN 1 ELSE 0 END AS invalidated,
+           CASE WHEN coalesce(s.wal_status, '') = 'extended' THEN 1 ELSE 0 END AS beyond_cap
+    FROM pg_replication_slots s
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN current_setting('max_slot_wal_keep_size') = '-1' THEN -1
+                  ELSE current_setting('max_slot_wal_keep_size')::bigint * 1048576
+             END AS max_bytes
+    ) b
+  metrics:
+    - slot_name:
+        usage: "LABEL"
+        description: "复制槽名称"
+    - slot_type:
+        usage: "LABEL"
+        description: "physical / logical"
+    - wal_status:
+        usage: "LABEL"
+        description: "reserved / extended / unreserved / lost / 空"
+    - active:
+        usage: "GAUGE"
+        description: "1 = 有消费者连接"
+    - reserved:
+        usage: "GAUGE"
+        description: "1 = restart_lsn 已 reserve（正在持有 WAL）"
+    - retained_bytes:
+        usage: "GAUGE"
+        description: "pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)"
+    - retained_pct_of_budget:
+        usage: "GAUGE"
+        description: "相对 max_slot_wal_keep_size 的百分比；兜底未配置时为 NULL（指标缺值）"
+    - invalidated:
+        usage: "GAUGE"
+        description: "1 = wal_status=lost（槽已失效，须评估重快照）"
+    - beyond_cap:
+        usage: "GAUGE"
+        description: "1 = wal_status=extended（已超过兜底值但 WAL 尚未丢失）"
