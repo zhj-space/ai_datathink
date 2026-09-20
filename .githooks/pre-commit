@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# 提交前敏感信息自检（启用方式见 AGENTS §7 / §9：git config core.hooksPath .githooks）
+# 说明：钩子走的是「已 staged」的文件；绕过用 `git commit --no-verify`（须在提交信息里说明原因）。
+exec bash tools/pre_push_scan.sh --staged
