@@ -316,6 +316,7 @@ nproc; free -g; lsblk -d -o NAME,ROTA,SIZE; fio --name=seqwrite --rw=write --bs=
 
 - **不写入真实凭证与敏感信息**：连接串、口令、token、域名、账号一律占位符；密钥入 KMS/Vault 或加密 Secret（安全基线①）。
   **公网 IP 与主机名同样按敏感信息处理**（2026-09-21 整改：同步 GitHub 时发现 6 份文档含服务器公网 IP/主机名共 12 处，已替换为 `<POC服务器公网IP>` / `<POC服务器主机名>`；**注意：首次提交的历史里仍留有原值**，如需彻底清除须重写历史或改私有仓库）。
+  **⚠️ 挂账（2026-09-21，未闭环）**：GitHub 仓库 `zhj-space/ai_datathink` 经 API 实测 **`visibility=public`**，且**重写历史的旧提交对象仍能从远端按 SHA 拉取**（`git fetch origin f9c5d2c…` 实测成功）⇒ **定稿/对外之前必须二选一**：① 仓库设为 **private**（或删除重建后再推）；② 请 GitHub Support 触发仓库 GC。改完后应复核 `git fetch origin <旧SHA>` **必须失败**。同批建议：把本环境 POC 口令轮换一次（口令从未入库，但曾在会话/终端出现）。
 - **PII 处理**：样本只留脱敏特征，原文 ≤30 天加密留存（安全基线⑦）；不得在仓库留下真实业务数据样本。
 - **生产库**：未完成合规边界确认与续接窗口签约定不得接入；CDC 接入配置与复制槽相关变更须 DBA 审批后执行。
 - **不执行破坏性操作**（`rm -rf`、`DROP`、删复制槽、`git reset --hard`）除非用户明确要求；删除复制槽必须走"作业下线 checklist"（ADR-A2 第 2 件第③道防线）。
